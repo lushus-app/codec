@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = ["crates/h264-bitstream"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lushus-app/codec"
+categories = ["multimedia::video", "no-std"]
+keywords = ["h264", "avc", "video", "codec", "decoder"]
+
+# Lints shared by every crate in the workspace. Crates opt in with
+# `[lints] workspace = true`.
+#
+# `unsafe_code` is deliberately NOT here: each crate root carries its own
+# `#![forbid(unsafe_code)]` so the guarantee is visible in the file you are
+# reading, and it survives the crate being built outside this workspace.
+# CI checks that every crate root has it (.github/workflows/ci.yml).
+[workspace.lints.rust]
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unreachable_pub = "deny"
+
+# The clippy selections below are the machine-checkable half of the
+# "no panics on any input" invariant (PRD N2.1, CLAUDE.md invariant 3).
+# Test modules legitimately panic and index; they carry local `allow`s.
+[workspace.lints.clippy]
+indexing_slicing = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+# Denied once the shape of the parsing code is known; warn for now so it
+# informs the design instead of dictating it (PRD N2.5).
+arithmetic_side_effects = "warn"

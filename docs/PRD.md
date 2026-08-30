@@ -1,6 +1,6 @@
 # PRD: `codec` — A Memory-Safe H.264 Codec in Rust
 
-**Status:** Draft v0.3
+**Status:** Draft v0.4
 **Owner:** brandon.vrooman@innobit.io
 **Target context:** user-generated content — video uploaded to a website, then streamed
 **License:** MIT OR Apache-2.0 (dual)
@@ -142,7 +142,7 @@ and is gated on its conformance criteria (§8).
 
 | ID | Requirement |
 |---|---|
-| F0.1 | Bit reader with Exp-Golomb decoding: `u(n)`, `f(n)`, `ue(v)`, `se(v)`, `me(v)`, `te(v)`; `more_rbsp_data()`; every read returns `Result` on exhaustion. |
+| F0.1 | Bit reader with Exp-Golomb decoding: `u(n)`, `f(n)`, `ue(v)`, `se(v)`, `te(v)`; `more_rbsp_data()`; every read returns `Result` on exhaustion. `ue(v)` rejects a run of leading zeros longer than 32 rather than looping or overflowing (N2.4). `me(v)` is *not* here — see F1.3. |
 | F0.2 | Annex B byte-stream parsing: start-code scanning (3- and 4-byte), NAL unit delimitation, emulation-prevention byte (`0x03`) removal to produce RBSP. |
 | F0.3 | AVCC/`avcC` length-prefixed NAL parsing (1/2/4-byte lengths) with SPS/PPS extraction from the decoder configuration record. |
 | F0.4 | NAL unit header parsing: `nal_ref_idc`, `nal_unit_type`; dispatch for types 1, 5, 6, 7, 8, 9, 12; graceful skip of unknown/reserved types. |
@@ -159,7 +159,7 @@ Target: profile_idc 66 with `constraint_set1_flag`, 4:2:0 8-bit progressive, CAV
 |---|---|
 | F1.1 | Slice header parsing for I and P slices, including ref list reordering and `dec_ref_pic_marking`. |
 | F1.2 | CAVLC residual decoding: `coeff_token` with `nC` derived from neighboring blocks, trailing-ones signs, `level_prefix`/`level_suffix` with suffix-length adaptation, `total_zeros`, `run_before`. |
-| F1.3 | Macroblock layer for I and P: `mb_type` tables, `coded_block_pattern` (`me(v)` mapping), `mb_qp_delta`, sub-macroblock partitioning to 4×4, `I_PCM`. |
+| F1.3 | Macroblock layer for I and P: `mb_type` tables, `coded_block_pattern` (`me(v)` mapping), `mb_qp_delta`, sub-macroblock partitioning to 4×4, `I_PCM`. The `me(v)` mapping lives here rather than in the bit reader: which of the two mapping tables applies depends on intra vs. inter prediction mode and on `ChromaArrayType` (clause 9.1.2), context the bit reader does not have. |
 | F1.4 | Inverse scan (zigzag), dequantization (`LevelScale`, QP derivation, chroma QP mapping with `chroma_qp_index_offset`), 4×4 integer inverse transform, 4×4 luma DC Hadamard for `Intra_16x16`, 2×2 chroma DC Hadamard. |
 | F1.5 | Intra prediction: `Intra_4x4` (9 modes with predicted-mode derivation), `Intra_16x16` (4 modes), chroma 8×8 (4 modes), availability rules, `constrained_intra_pred_flag`. |
 | F1.6 | Inter prediction (P): partitions 16×16/16×8/8×16 and sub-partitions to 4×4, median MV prediction with the 16×8/8×16 directional exceptions, `P_Skip` MV derivation, luma 6-tap half-pel interpolation (`[1,−5,20,20,−5,1]`/32) plus quarter-pel bilinear averaging, chroma 1/8-pel bilinear, edge-extended reference fetch. |
@@ -261,6 +261,7 @@ codec/
 ├── crates/
 │   ├── h264/               # core codec: decoder now, encoder in phase 5
 │   ├── h264-bitstream/     # bit reader, Exp-Golomb, Annex B, AVCC, NAL, RBSP
+│   ├── h264-simd/          # the ONLY crate permitted `unsafe`; see §6.5
 │   ├── h264-containers/    # ISOBMFF/MP4 demux, Y4M/YUV writers
 │   └── codec-cli/          # `codec` binary
 ├── fuzz/                   # cargo-fuzz targets
@@ -326,11 +327,18 @@ bytes → [Annex B / AVCC split] → NAL → RBSP → { SPS | PPS | SEI | slice 
 
 ### 6.5 The `unsafe` policy
 
-- Every crate carries `#![forbid(unsafe_code)]` by default.
-- The `simd` feature enables exactly one module per architecture that downgrades to
-  `#![deny(unsafe_op_in_unsafe_fn)]`. That module contains only intrinsics, is entered through a
-  runtime feature-detection gate, and has no control flow that depends on bitstream contents
-  beyond bounds already validated by the scalar caller.
+- Every crate carries `#![forbid(unsafe_code)]` — unconditionally, with no feature that relaxes it.
+- **`unsafe` is confined to a separate `h264-simd` crate.** `forbid` cannot be lifted by an inner
+  `allow`; that is precisely what distinguishes it from `deny`. So a SIMD module cannot live inside
+  a crate whose root forbids unsafe, and the alternative — weakening the whole `h264` crate to
+  `deny` whenever the `simd` feature is on — would trade a crate-wide guarantee for one module.
+  Instead `h264-simd` is the only crate in the workspace permitted `unsafe`: it carries
+  `#![deny(unsafe_code)]` with an explicit `#[allow]` on each intrinsics module, is an optional
+  dependency behind the `simd` feature, and is audited and fuzzed on its own. `h264` keeps
+  unconditional `forbid` forever.
+- Each intrinsics module contains only intrinsics, is entered through a runtime feature-detection
+  gate, and has no control flow that depends on bitstream contents beyond bounds already validated
+  by the scalar caller.
 - Every SIMD kernel has a differential test against its scalar twin over randomized and
   conformance-derived inputs. A SIMD kernel that is not bit-exact with scalar is a release blocker.
 - The default build (no features) has **zero** `unsafe` in the entire dependency tree; this is
@@ -554,6 +562,8 @@ Innobit, or the `lushus-app` organization — that line needs changing before pu
 | 2026-08-30 | **CABAC is sequenced before B-slices** (P2a before P2b). | Each large feature lands against a pipeline already proven by conformance vectors. |
 | 2026-08-30 | **Correctness is primary; performance is secondary.** | Priority order added to §3.1; §7.3 targets demoted to directional; performance removed from the P4 release gate and marked non-blocking in §10. |
 | 2026-08-30 | **License: `MIT OR Apache-2.0`** (dual). Resolves Q2. | `LICENSE-MIT` and `LICENSE-APACHE` added at the repository root; every manifest carries `license = "MIT OR Apache-2.0"`; `cargo-deny` enforces dependency-license compatibility (§7.5). Note this is a copyright choice and is independent of the H.264 patent question in R6/Q1. |
+| 2026-08-30 | **`unsafe` moves to a separate `h264-simd` crate.** Found while scaffolding the workspace: `#![forbid(unsafe_code)]` and the `simd` feature are incompatible as originally specified, because `forbid` cannot be lifted by an inner `allow`. | §6.1 layout and §6.5 rewritten. `h264` keeps unconditional `forbid`; the optional `h264-simd` crate is the sole holder of `unsafe` and is audited separately. Enforced in CI by a check that every crate root carries the attribute. |
+| 2026-08-30 | **`me(v)` moves from the bit reader (F0.1) to the macroblock layer (F1.3).** | Which mapping table applies depends on prediction mode and `ChromaArrayType` (clause 9.1.2) — context `h264-bitstream` does not and should not have. Keeps the crate boundary honest. |
 | 2026-08-30 | **MSRV: Rust 1.94**, the latest stable at project start. Resolves Q3. | `rust-version = "1.94"` in every manifest, tested in CI on that exact toolchain. A floor, not a moving target: raising it requires a specific justifying feature and is a minor-version event (§7.4). |
 
 ---
