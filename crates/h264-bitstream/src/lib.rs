@@ -23,10 +23,33 @@
 //! [`codec`]: https://github.com/lushus-app/codec
 //! [`forbid(unsafe_code)`]: https://doc.rust-lang.org/rustc/lints/levels.html#forbid
 //!
+//! # Example
+//!
+//! ```
+//! use h264_bitstream::BitReader;
+//!
+//! let mut reader = BitReader::new(&[0b0001_0000, 0b1000_0000]);
+//! assert_eq!(reader.read_ue()?, 7); // 0001000
+//! # Ok::<(), h264_bitstream::BitstreamError>(())
+//! ```
+//!
 //! # Status
 //!
-//! Scaffolding only. The bit reader lands next; see `docs/PRD.md` requirement F0.1.
+//! The bit reader is implemented; Annex B, AVCC and NAL parsing land next. See
+//! `docs/PRD.md` requirements F0.2 through F0.4.
 
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+
+#[cfg(test)]
+extern crate std;
+
+mod error;
+mod reader;
+
+pub use error::{BitstreamError, InvalidReason, Result};
+pub use reader::BitReader;
+
+#[cfg(test)]
+mod tests;
