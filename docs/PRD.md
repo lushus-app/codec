@@ -142,7 +142,7 @@ and is gated on its conformance criteria (§8).
 
 | ID | Requirement |
 |---|---|
-| F0.1 | Bit reader with Exp-Golomb decoding: `u(n)`, `f(n)`, `ue(v)`, `se(v)`, `te(v)`; `more_rbsp_data()`; every read returns `Result` on exhaustion. `ue(v)` rejects a run of leading zeros longer than 32 rather than looping or overflowing (N2.4). `me(v)` is *not* here — see F1.3. |
+| F0.1 | Bit reader with Exp-Golomb decoding: `u(n)`, `f(n)`, `ue(v)`, `se(v)`, `te(v)`; `more_rbsp_data()`; every read returns `Result` on exhaustion. `ue(v)` rejects a run of 32 or more leading zeros rather than looping or overflowing: clause 9.1 bounds the value to `[0, 2^32 - 2]`, which is reached at exactly 31 leading zeros (N2.4). `me(v)` is *not* here — see F1.3. |
 | F0.2 | Annex B byte-stream parsing: start-code scanning (3- and 4-byte), NAL unit delimitation, emulation-prevention byte (`0x03`) removal to produce RBSP. |
 | F0.3 | AVCC/`avcC` length-prefixed NAL parsing (1/2/4-byte lengths) with SPS/PPS extraction from the decoder configuration record. |
 | F0.4 | NAL unit header parsing: `nal_ref_idc`, `nal_unit_type`; dispatch for types 1, 5, 6, 7, 8, 9, 12; graceful skip of unknown/reserved types. |
