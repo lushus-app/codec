@@ -1,8 +1,9 @@
 # PRD: `codec` — A Memory-Safe H.264 Codec in Rust
 
-**Status:** Draft v0.2
+**Status:** Draft v0.3
 **Owner:** brandon.vrooman@innobit.io
 **Target context:** user-generated content — video uploaded to a website, then streamed
+**License:** MIT OR Apache-2.0 (dual)
 **Last updated:** 2026-08-30
 
 ---
@@ -387,7 +388,9 @@ tracked issue, not a merge blocker; a conformance or fuzzing regression is a mer
 - Tier 2: `wasm32-unknown-unknown`, `aarch64-unknown-linux-gnu`.
 - Core crates are `alloc`-only (no `std` requirement) so embedded and WASM targets work without
   feature gymnastics. `std` is a default-on feature.
-- MSRV declared and tested in CI; bumps are minor-version events.
+- **MSRV is Rust 1.94** (the latest stable at project start), declared as `rust-version` in every
+  manifest and tested in CI on that exact toolchain. It is a floor, not a moving target: it stays
+  at 1.94 until a specific feature justifies raising it, and a raise is a minor-version event.
 
 ### 7.5 Code quality
 
@@ -396,6 +399,9 @@ tracked issue, not a merge blocker; a conformance or fuzzing regression is a mer
   (e.g. `/// ITU-T H.264 clause 7.3.2.1.1`). Spec traceability is a hard review requirement —
   it is what makes conformance bugs findable.
 - Minimal dependencies in the core crates; each new dependency needs justification in review.
+- **Licensed `MIT OR Apache-2.0`** (the Rust ecosystem norm), with `LICENSE-MIT` and
+  `LICENSE-APACHE` at the repository root and `license = "MIT OR Apache-2.0"` in every manifest.
+  `cargo-deny` enforces that no dependency carries an incompatible license.
 
 ---
 
@@ -528,14 +534,17 @@ decoder ships.
 | # | Question | Needed by |
 |---|---|---|
 | Q1 | Patent licensing posture for distribution (see R6) — and does it differ for the encoder? | Before public release |
-| Q2 | Software license: MIT/Apache-2.0 dual (Rust ecosystem norm), or something more restrictive? | P0 |
-| Q3 | MSRV policy: latest stable, or N-2 releases? | P0 |
 | Q4 | Is WASM a first-class target (affects threading model and binary-size budget) or best-effort? | P0 |
 | Q5 | Should `inspect` output stabilize as a supported machine-readable format (i.e. semver'd), or stay a debugging tool? | P4 |
 | Q6 | Error-concealment default: strict errors, or best-effort playback? Player embedders and security embedders want opposite defaults. | P4 |
 | Q7 | Does anyone need 10-bit / 4:2:2 badly enough to reorder it ahead of the encoder? | After v1.0 |
 
-Q2 and Q3 are needed to scaffold the P0 workspace and are the next decisions required.
+Q2 (license) and Q3 (MSRV) were resolved on 2026-08-30 — see the decisions log below. Q1 is the
+only remaining item that gates anything external; the rest are P4-or-later.
+
+One item the decisions below deliberately leave open: the **copyright holder** named in
+`LICENSE-MIT` currently reads *Brandon Vrooman*. If the work should be held by an entity —
+Innobit, or the `lushus-app` organization — that line needs changing before public release.
 
 ### 13.1 Decisions log
 
@@ -544,6 +553,8 @@ Q2 and Q3 are needed to scaffold the P0 workspace and are the next decisions req
 | 2026-08-30 | **Target is UGC upload/streaming**, not broadcast. | Confirms the interlace/MBAFF exclusion (§3.2); adds the input-mix analysis in §4.2; makes P3/High — not P1 — the first deployable version. |
 | 2026-08-30 | **CABAC is sequenced before B-slices** (P2a before P2b). | Each large feature lands against a pipeline already proven by conformance vectors. |
 | 2026-08-30 | **Correctness is primary; performance is secondary.** | Priority order added to §3.1; §7.3 targets demoted to directional; performance removed from the P4 release gate and marked non-blocking in §10. |
+| 2026-08-30 | **License: `MIT OR Apache-2.0`** (dual). Resolves Q2. | `LICENSE-MIT` and `LICENSE-APACHE` added at the repository root; every manifest carries `license = "MIT OR Apache-2.0"`; `cargo-deny` enforces dependency-license compatibility (§7.5). Note this is a copyright choice and is independent of the H.264 patent question in R6/Q1. |
+| 2026-08-30 | **MSRV: Rust 1.94**, the latest stable at project start. Resolves Q3. | `rust-version = "1.94"` in every manifest, tested in CI on that exact toolchain. A floor, not a moving target: raising it requires a specific justifying feature and is a minor-version event (§7.4). |
 
 ---
 
