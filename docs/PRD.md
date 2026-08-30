@@ -1,7 +1,8 @@
 # PRD: `codec` — A Memory-Safe H.264 Codec in Rust
 
-**Status:** Draft v0.1
+**Status:** Draft v0.2
 **Owner:** brandon.vrooman@innobit.io
+**Target context:** user-generated content — video uploaded to a website, then streamed
 **Last updated:** 2026-08-30
 
 ---
@@ -12,6 +13,11 @@
 video codec written in Rust. It ships as an embeddable library plus a CLI, and is built to be a
 **memory-safe alternative to `libavcodec`/`openh264` for applications that decode untrusted
 H.264**.
+
+The deployment context is a **UGC upload/streaming pipeline**: arbitrary video arrives from the
+public internet, gets validated and processed server-side, and is streamed back out. That context
+is what makes the memory-safety thesis load-bearing rather than academic — every byte the decoder
+touches is attacker-supplied — and it sets the feature priorities in §3 and §4.2.
 
 The product is delivered in two large arcs:
 
@@ -58,11 +64,17 @@ itself, not in the API surface.
 | G5 | **Competitive-enough performance.** Real-time 1080p decode on a single modern core; see §7 for the numeric bar. |
 | G6 | **Embeddability.** A small, stable, well-documented Rust API with predictable allocation behavior. |
 
+**Priority order when goals conflict: G1 correctness → G2/G3 safety → G4/G6 usability → G5 speed.**
+This ordering is normative, not a sentiment. Concretely: a performance target is never met by
+weakening a correctness or safety guarantee, performance work does not begin until the relevant
+conformance gate is green, and no performance number blocks a release (§7.3). If a reviewer has to
+choose between a slower decoder and a less certain one, they pick the slower one.
+
 ### 3.2 Non-Goals (v1.0)
 
 | Non-goal | Rationale |
 |---|---|
-| Interlaced coding (PicAFF / MBAFF, field pictures) | Roughly doubles the complexity of neighbor derivation, deblocking, MV prediction, and DPB management for content that is largely legacy broadcast. Deferred to v1.1; see R3. |
+| Interlaced coding (PicAFF / MBAFF, field pictures) | Roughly doubles the complexity of neighbor derivation, deblocking, MV prediction, and DPB management. Confirmed as excluded: the target is UGC upload/streaming, which is overwhelmingly progressive (§4.2). The residual interlaced tail is handled by the fallback path in N1.3, not by us. Deferred to v1.1; see R3. |
 | 4:2:2, 4:4:4, monochrome-only, and >8-bit profiles (High 10 / 4:2:2 / 4:4:4 Predictive) | Professional/mezzanine formats outside the initial target. Chroma format and bit depth are parameterized in the design so this is additive, not a rewrite. |
 | Extended profile (88), data partitioning (NAL types 2–4) | Effectively unused in the wild. |
 | FMO (slice groups) and ASO (arbitrary slice order) | Baseline-only features excluded from Constrained Baseline; not present in real-world streams. |
@@ -95,6 +107,28 @@ itself, not in the API surface.
 1. *"Decode this MP4 to frames."* — `codec decode input.mp4 -o out.y4m`, or three lines of library code.
 2. *"Is this stream valid, and what's in it?"* — `codec inspect input.h264` prints NAL structure, SPS/PPS, per-slice headers.
 3. *"Decode this hostile blob without getting owned."* — the library returns `Err(...)` and stays within its configured memory budget.
+
+### 4.2 What the target input mix actually looks like
+
+UGC uploads are not a uniform population, and the distribution drives the phasing:
+
+| Source | Typical coding | Implication |
+|---|---|---|
+| Phone captures (iOS/Android) | High profile, 4:2:0 8-bit, progressive, MP4/`avcC` | The bulk of the volume. Needs **P3 complete** — this is why v1.0 is High, not Baseline. |
+| `x264`/`ffmpeg` re-encodes, editing-app exports | High profile, CABAC, B-frames, occasionally 8×8 transform + custom scaling lists | Exercises the full Main + High feature surface, including weighted prediction and long-term refs. |
+| Screen and game recorders (OBS, browser capture) | Constrained Baseline or Main, long GOPs, sometimes very high resolutions | Stresses DPB sizing and the resource limits in F4.4 more than it stresses coding tools. |
+| WebRTC / conferencing captures | Constrained Baseline, CAVLC, no B-frames, frequent IDRs | Covered by **P1**; also the class most likely to be truncated or mid-GOP. |
+| Legacy files (camcorder rips, TV captures, old transcodes) | Occasionally interlaced/MBAFF, occasionally Baseline with FMO | The long tail. Out of scope by §3.2 — must fail *precisely*, never silently. |
+| Hostile uploads | Deliberately malformed | The entire premise of G2/G3. |
+
+Two consequences are load-bearing:
+
+- **Constrained Baseline alone is not a shippable product for this context**, so P1 is a stepping
+  stone rather than a release. The first version worth deploying is **P3**.
+- **The precision of `Error::Unsupported` (N1.3) is a product feature, not a nicety.** An upload
+  pipeline that knows exactly which file it cannot handle can route that file to `ffmpeg` and keep
+  the safe decoder on the other 99%. A decoder that fails vaguely forces the operator to route
+  *everything* to `ffmpeg`, which throws away the reason to adopt us at all.
 
 ---
 
@@ -325,10 +359,15 @@ bytes → [Annex B / AVCC split] → NAL → RBSP → { SPS | PPS | SEI | slice 
 
 ### 7.3 Performance
 
+Per the priority order in §3.1, **performance is secondary to correctness and these numbers do not
+gate a release.** They are directional targets: they tell us when to stop optimizing, they catch
+regressions, and they are tracked publicly — but a v1.0 that is conformant, safe, and 20% slow
+ships, while one that is fast and fails a conformance vector does not.
+
 Measured on a modern x86-64 desktop core, 8-bit 4:2:0, single-threaded unless noted, decode-only
 (no display, no color conversion), against `ffmpeg -threads 1` as the baseline.
 
-| Content | v1.0 target | v1.1 target (`simd`) |
+| Content | v1.0 target (directional) | v1.1 target (`simd`) |
 |---|---|---|
 | 720p30 Main | ≥ 2× real-time | ≥ 5× real-time |
 | 1080p30 Main | ≥ 1× real-time | ≥ 2.5× real-time |
@@ -336,8 +375,11 @@ Measured on a modern x86-64 desktop core, 8-bit 4:2:0, single-threaded unless no
 | Ratio vs. `libavcodec` (1 thread) | ≤ 3.0× slower | ≤ 1.6× slower |
 | Frame-parallel scaling (8 cores) | — | ≥ 4× over single-thread |
 
-Steady-state decoding allocates zero bytes per frame. Benchmarks run in CI on a fixed corpus with
-regression alerts at >5% change.
+Steady-state decoding allocates zero bytes per frame — this one *is* a hard requirement, because it
+is a robustness property (N2.3) that happens to also be a performance property.
+
+Benchmarks run in CI on a fixed corpus with regression alerts at >5% change. A regression alert is a
+tracked issue, not a merge blocker; a conformance or fuzzing regression is a merge blocker.
 
 ### 7.4 Portability
 
@@ -425,7 +467,7 @@ work (conformance debugging dominates and is hard to schedule).
 | **P2a** | CABAC engine + all binarizations | Main-profile CABAC I/P vectors bit-exact | 3–5 wks |
 | **P2b** | B-slices, direct modes, weighted prediction, MMCO/long-term | Progressive Main vectors 100% bit-exact | 4–6 wks |
 | **P3** | High profile: 8×8 transform, `Intra_8x8`, scaling lists | Progressive High 4:2:0 8-bit vectors 100% bit-exact | 3–4 wks |
-| **P4** | MP4 demux, hardening, resource limits, SIMD, multithreading, docs, API freeze → **v1.0** | Performance targets met; 1000 fuzz-hours clean; differential corpus clean | 5–8 wks |
+| **P4** | MP4 demux, hardening, resource limits, SIMD, multithreading, docs, API freeze → **v1.0** | 1000 fuzz-hours clean; differential corpus clean; resource limits enforced under fuzzing. Performance measured and published, not gated (§7.3) | 5–8 wks |
 | **P5** | Encoder (separate PRD) | See §11 | TBD |
 
 Deliberate sequencing note: **CABAC before B-slices.** Both are large, and debugging them
@@ -442,7 +484,7 @@ validated on I/P streams where the rest of the pipeline is already known-good.
 | Real-world differential corpus agreement | ≥ 99.5% of streams bit-exact; 100% of failures triaged and documented |
 | Fuzz hours without a crash | ≥ 1000 |
 | `unsafe` blocks in default build | 0 |
-| 1080p30 Main single-thread decode | ≥ real-time |
+| 1080p30 Main single-thread decode | ≥ real-time — *tracked, non-blocking* |
 | Public API documented | 100% of public items, with runnable examples |
 | Time from `cargo add` to a decoded frame | ≤ 10 lines of code |
 
@@ -474,7 +516,7 @@ decoder ships.
 | R1 | **Conformance debugging is unpredictable.** A single wrong neighbor-availability rule can fail dozens of vectors with no obvious signal. | Schedule slip | Build the vector harness in P0, before any decoding. Add MB-level trace comparison against the JM/ffmpeg trace output early — finding *which macroblock* diverges is 90% of the debugging. |
 | R2 | **CABAC is a large, unforgiving surface.** Context tables are long and transcription errors are silent. | Multi-week slip | Generate context tables from the spec tables programmatically; verify against captured decision traces; land CABAC on I/P only. |
 | R3 | **Excluding interlace may block real users.** Broadcast/legacy content is often MBAFF. | Reduced addressable use cases | Report `Error::Unsupported` precisely so callers can fall back. Re-evaluate for v1.1 based on demand; the DPB and neighbor abstractions are designed to accept field pictures later. |
-| R4 | **Safe-Rust bounds checking costs performance.** | Perf targets missed | Design for slice-based plane access with hoisted bounds checks; profile early, not at the end; `simd` feature as the escape valve. Note the perf bar (§7.3) is deliberately "competitive," not "fastest." |
+| R4 | **Safe-Rust bounds checking costs performance.** | Perf targets missed | Design for slice-based plane access with hoisted bounds checks; profile early, not at the end; `simd` feature as the escape valve. Largely de-risked by §3.1: performance targets are directional and do not gate a release, so the failure mode here is a slower v1.0, not a blocked one. |
 | R5 | **Conformance vector access.** The suite is distributed by ITU-T and mirrors vary in completeness. | Weakened primary oracle | Confirm access in P0. If incomplete, weight differential testing against `ffmpeg` more heavily and document the gap honestly. |
 | R6 | **H.264 patent licensing.** H.264 is covered by a patent pool (Via LA, formerly MPEG LA). Implementing and distributing a codec has licensing implications that are a *business* question, not a technical one, and they differ for decoders vs. encoders and for open-source vs. commercial distribution. | Distribution/legal | Flagged as an open question (§13, Q1) for the owner to resolve with counsel before public release. This is not legal advice and the engineering plan does not depend on the answer. |
 | R7 | **Scope creep into "just add 10-bit / just add interlace."** | Never shipping v1.0 | Non-goals in §3.2 are contractual. New features go to v1.1 unless they block a conformance gate. |
@@ -492,6 +534,16 @@ decoder ships.
 | Q5 | Should `inspect` output stabilize as a supported machine-readable format (i.e. semver'd), or stay a debugging tool? | P4 |
 | Q6 | Error-concealment default: strict errors, or best-effort playback? Player embedders and security embedders want opposite defaults. | P4 |
 | Q7 | Does anyone need 10-bit / 4:2:2 badly enough to reorder it ahead of the encoder? | After v1.0 |
+
+Q2 and Q3 are needed to scaffold the P0 workspace and are the next decisions required.
+
+### 13.1 Decisions log
+
+| Date | Decision | Consequence |
+|---|---|---|
+| 2026-08-30 | **Target is UGC upload/streaming**, not broadcast. | Confirms the interlace/MBAFF exclusion (§3.2); adds the input-mix analysis in §4.2; makes P3/High — not P1 — the first deployable version. |
+| 2026-08-30 | **CABAC is sequenced before B-slices** (P2a before P2b). | Each large feature lands against a pipeline already proven by conformance vectors. |
+| 2026-08-30 | **Correctness is primary; performance is secondary.** | Priority order added to §3.1; §7.3 targets demoted to directional; performance removed from the P4 release gate and marked non-blocking in §10. |
 
 ---
 
