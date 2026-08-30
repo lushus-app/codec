@@ -1,0 +1,47 @@
+# cargo-deny configuration.
+#
+# The `bans` section below is the machine-checkable half of the project's
+# first invariant: nothing in `crates/` may wrap a C codec (PRD 3.1, CLAUDE.md).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# The project is `MIT OR Apache-2.0`; dependencies must be compatible with both.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Binding to an existing C/C++ H.264 implementation would reintroduce exactly
+# the memory-unsafety this project exists to remove. These tools are test
+# oracles only and belong in xtask/, tests/, and fuzz/ — never in a dependency
+# graph reachable from `crates/`.
+deny = [
+    { name = "ffmpeg-sys", reason = "PRD 3.1: nothing wraps a C codec; ffmpeg is a test oracle only" },
+    { name = "ffmpeg-sys-next", reason = "PRD 3.1: nothing wraps a C codec; ffmpeg is a test oracle only" },
+    { name = "ffmpeg-next", reason = "PRD 3.1: nothing wraps a C codec; ffmpeg is a test oracle only" },
+    { name = "openh264", reason = "PRD 3.1: nothing wraps a C codec" },
+    { name = "openh264-sys2", reason = "PRD 3.1: nothing wraps a C codec" },
+    { name = "libavcodec-sys", reason = "PRD 3.1: nothing wraps a C codec" },
+    { name = "video-rs", reason = "PRD 3.1: wraps ffmpeg" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

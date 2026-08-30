@@ -22,10 +22,12 @@ These are the product, not preferences. Violating one is a blocking review failu
    `ffmpeg` from library code. Those tools are **test oracles only**, and they belong in
    `xtask/`, `tests/`, and `fuzz/` — never in `crates/`. A safe wrapper around an unsafe parser
    is still an unsafe parser; that is the whole reason this project exists.
-2. **No `unsafe` in the default build.** Every crate carries `#![forbid(unsafe_code)]`. The sole
-   exception is the per-architecture SIMD module behind the `simd` feature (PRD §6.5), which is
-   intrinsics-only, runtime-gated, and must be bit-exact with its scalar twin. Do not add
-   `unsafe` to win a benchmark.
+2. **No `unsafe` in the default build.** Every crate root carries `#![forbid(unsafe_code)]`,
+   unconditionally — CI fails if one is missing. `unsafe` lives in exactly one place: the optional
+   `h264-simd` crate (PRD §6.5), which is intrinsics-only, runtime-gated, and must be bit-exact
+   with its scalar twin. `forbid` cannot be lifted by an inner `allow`, so do not try to carve out
+   a module in another crate — add it to `h264-simd` or do without. Do not add `unsafe` to win a
+   benchmark.
 3. **No panics on any input.** Indexing, slicing, arithmetic, and allocation on bitstream-derived
    values must be fallible or explicitly bounded. Prefer `get()` over `[]`, checked/saturating
    arithmetic over bare operators, and a typed error over `unwrap()`/`expect()`/`panic!`. A panic
@@ -60,6 +62,7 @@ and is independently shippable. Two ordering rules matter:
 ```
 crates/h264/              core codec (decoder now, encoder in phase 5)
 crates/h264-bitstream/    bit reader, Exp-Golomb, Annex B, AVCC, NAL, RBSP
+crates/h264-simd/         the ONLY crate permitted `unsafe` (optional, `simd` feature)
 crates/h264-containers/   ISOBMFF/MP4 demux, Y4M/YUV writers
 crates/codec-cli/         `codec` binary
 fuzz/                     cargo-fuzz targets
@@ -91,10 +94,21 @@ The codec core is **sans-I/O**: it never opens a file or socket. All I/O lives i
 
 Correctness here is objective — do not claim it without running the checks.
 
+Live today — these are what CI runs, and they must pass before you push:
+
 ```sh
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --workspace
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+python3 .github/scripts/check_invariants.py   # forbid(unsafe_code); no C codec deps
+cargo deny check all                          # licenses, advisories, banned wrappers
+```
+
+Not built yet — do not run these and conclude the repo is broken. They arrive with the
+conformance harness at the end of P0, and with the first fuzz targets:
+
+```sh
 cargo xtask conformance            # ITU-T H.264.1 vectors; fetches on first run
 cargo xtask difftest               # per-frame MD5 vs. ffmpeg on a real-world corpus
 cargo +nightly fuzz run fuzz_decode -- -max_total_time=60

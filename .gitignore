@@ -1,0 +1,9 @@
+/target
+
+# Cargo.lock IS committed: this workspace ships a binary (codec-cli) and CI
+# pins the MSRV toolchain, so a locked dependency set keeps both reproducible.
+
+# Conformance vectors and the differential corpus are large and fetched on
+# demand; only manifests and expected checksums belong in git (PRD 8.1).
+/tests/conformance/vectors/
+/tests/corpus/
